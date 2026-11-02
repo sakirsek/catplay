@@ -206,7 +206,10 @@ impl Reconcilable for CarPlayUsbClientGadget {
     async fn on_update(&mut self, new: ClientState) -> ClientState {
         match new {
             Ok(ref ok) => info!("Progressing -> {ok:?}"),
-            Err(ref err) => error!("Entered error state: {err:?}"),
+            Err(ref err) => {
+                error!("Entered error state: {err:?}");
+                timeline::record_error(&format_args!("tx: {err:?}"));
+            }
         };
         match new {
             // The car has opened CarPlay over USB; next it advertises its receiver.

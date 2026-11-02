@@ -1,8 +1,9 @@
-use std::{error::Error, fs};
+use std::{error::Error, fs, path::Path};
 
 use crate::{AppConfig, CarPlayOutputManager, HomeKitManager, MfiManager};
 // use catplay_iap2_usb_gadget::gadget::GadgetHelper;
 use catplay_util::{EventReconciler, EventSleeper};
+use log::{info, warn};
 use tokio::signal;
 
 fn parse_config(path: String) -> Result<AppConfig, String> {
@@ -35,6 +36,13 @@ async fn wait_forever() -> Result<(), Box<dyn Error>> {
 impl Main {
     pub async fn start() -> Result<Main, Box<dyn Error>> {
         let config = parse_config("./c2a.toml".into()).or(parse_config("/etc/catplay/catplay.conf".into()))?;
+
+        if let Some(dir) = config.persist_dir.as_deref() {
+            match crate::boot_journal::start(Path::new(dir)) {
+                Ok(seq) => info!("Boot journal: this is boot {seq} ({dir}/journal)"),
+                Err(err) => warn!("Boot journal disabled: {err}"),
+            }
+        }
 
         // if let Err(_err) = GadgetHelper::cleanup_once() {
         //     error!("Failed to clean up gadgets, continuing anyway");

@@ -259,7 +259,10 @@ impl<T: AirPlayReceiverSink> Reconcilable for CarPlayWirelessGadget<T> {
     async fn on_update(&mut self, new: LocalStatus) -> LocalStatus {
         match new {
             Ok(ref ok) => info!("Progressing -> {ok:?}"),
-            Err(ref err) => error!("Entered error state: {err:?}"),
+            Err(ref err) => {
+                error!("Entered error state: {err:?}");
+                timeline::record_error(&format_args!("rx: {err:?}"));
+            }
         };
         if let Ok(LocalState::Receiving) = new {
             timeline::mark(Stage::PhoneSession);

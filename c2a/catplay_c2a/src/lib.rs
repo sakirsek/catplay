@@ -1,5 +1,6 @@
 #![recursion_limit = "256"]
 
+mod boot_journal;
 mod config;
 mod cp_output_manager;
 mod homekit_manager;
