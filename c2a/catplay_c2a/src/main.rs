@@ -46,6 +46,7 @@ async fn main() {
     println!("Booting!!");
     setup_prod_logger();
     AsyncLogger::set_async(true);
+    catplay_util::timeline::mark(catplay_util::timeline::Stage::AppStart);
     let b = AsyncLogger::create_barrier();
     if std::env::var("CATPLAY_TRACING").as_deref() == Ok("1") {
         warn!("Tracing is enabled (overhead)");

@@ -18,7 +18,9 @@ use catplay_iap2_usb::GadgetResult;
 use catplay_iap2_usb_host::{CarPlayPhoneGadget, CarPlayPhoneGadgetError, CarPlayPhoneGadgetStatus};
 use catplay_util::{
     ArcBox, AsyncShutdown, EventReconciler, EventSleeper, LazyAsync, Reconcilable, Reconciler, deadline_after, event_select,
-    notify::Notify, sleeper,
+    notify::Notify,
+    sleeper,
+    timeline::{self, Stage},
 };
 use log::{debug, error, info, warn};
 
@@ -206,6 +208,12 @@ impl Reconcilable for CarPlayUsbClientGadget {
             Ok(ref ok) => info!("Progressing -> {ok:?}"),
             Err(ref err) => error!("Entered error state: {err:?}"),
         };
+        match new {
+            // The car has opened CarPlay over USB; next it advertises its receiver.
+            Ok(CarPlayUsbClientGadgetStatus::WaitingForInvite) => timeline::mark(Stage::CarUsb),
+            Ok(CarPlayUsbClientGadgetStatus::Transmitting) => timeline::mark(Stage::CarSession),
+            _ => {}
+        }
 
         if new.is_err() {
             debug!("Cleaning up due to error state");
