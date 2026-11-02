@@ -2,7 +2,7 @@ use std::{io, time::Duration};
 
 use catplay_bonjour::{Bonjour, BonjourEntryHandle, BonjourType};
 use catplay_util::{AbortOnDropHandle, sleep, spawn};
-use log::debug;
+use log::{Level, debug, log};
 use macaddr::MacAddr6;
 use tokio::select;
 
@@ -45,7 +45,17 @@ impl CarPlayInviter {
 
         // Possibly sleep here after watch is started to differentiate between 1 vs >1 phones on first iteration?
 
+        let mut round: u64 = 0;
         loop {
+            round += 1;
+            // Release builds drop debug!, so a phone that never connects left no trace. Log the first rounds
+            // and then every 30th at info: enough to see what the phone answers without flooding the log.
+            let level = if round <= 20 || round % 30 == 0 {
+                Level::Info
+            } else {
+                Level::Debug
+            };
+
             let b = recv.borrow().clone();
             // Forcefully select first phone for now
             let phone = b.iter().next();
@@ -65,22 +75,31 @@ impl CarPlayInviter {
                 // Note that id is guaranteed to be a Bluetooth ID of the phone
                 let _id = &phone.1.entry.data.id;
                 for i in 0..MAX_ATTEMPTS {
-                    debug!("Inviting client(attempt {}/{}): {:?}", i + 1, MAX_ATTEMPTS, hostname);
+                    log!(
+                        level,
+                        "Inviting client (round {round}, attempt {}/{}): {:?} at {:?}",
+                        i + 1,
+                        MAX_ATTEMPTS,
+                        hostname,
+                        phone.1.entry.meta.addrs
+                    );
                     select! {
                         result = client.connect(&mac_addr, TIMEOUT) => {
                             match result {
-                                Ok(_) => { debug!("Invite accepted by {}", hostname); break },
+                                Ok(_) => { log!(level, "Invite accepted by {}", hostname); break },
                                 Err(err) => {
-                                    debug!("Invite rejected by {}: {err:?}", hostname)
+                                    log!(level, "Invite rejected by {}: {err:?}", hostname)
                                 }
                             }
                         }
 
                         Ok(_) = recv.changed() => {
-                            debug!("Interrupting, because a change was detected");
+                            log!(level, "Interrupting, because a change was detected");
                         }
                     }
                 }
+            } else {
+                log!(level, "No iPhone advertises _carplay-ctrl yet (round {round})");
             }
 
             select! {
