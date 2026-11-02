@@ -9,7 +9,12 @@ use catplay_carplay::{
     screen::tx::{ScreenTransmitError, ScreenTransmitProxy, ScreenTransmitSink},
     video::EncodedVideoFrame,
 };
-use catplay_util::{EventReconciler, EventSleeper, EventToken, deadline, event_select, futures_xordered::FuturesOrdered, mpsc};
+use catplay_util::{
+    EventReconciler, EventSleeper, EventToken, deadline, event_select,
+    futures_xordered::FuturesOrdered,
+    mpsc,
+    timeline::{self, Stage},
+};
 use futures::{FutureExt, future::BoxFuture};
 use log::{debug, error, info, warn};
 use std::{
@@ -139,6 +144,7 @@ impl OverlayManager {
                         warn!("Sink rejected iPhone frame?: {err}");
                     }
                     Ok(()) => {
+                        timeline::mark(Stage::FirstFrame);
                         debug!("Proxied iPhone frame at pts = {}", pts);
                     }
                 }

@@ -14,6 +14,7 @@ use catplay_iap2_usb::{GadgetError, NcmHelper};
 use catplay_mfi::MfiDeficeRef;
 use catplay_util::{
     AbortOnDropHandle, ArcBox, AsyncShutdown, EventSleeper, Reconcilable, Reconciler, deadline_after, event_select, sleep, spawn,
+    timeline::{self, Stage},
 };
 use log::{debug, error, info, trace, warn};
 use macaddr::MacAddr6;
@@ -260,6 +261,9 @@ impl<T: AirPlayReceiverSink> Reconcilable for CarPlayWirelessGadget<T> {
             Ok(ref ok) => info!("Progressing -> {ok:?}"),
             Err(ref err) => error!("Entered error state: {err:?}"),
         };
+        if let Ok(LocalState::Receiving) = new {
+            timeline::mark(Stage::PhoneSession);
+        }
 
         if new.is_err() {
             debug!("Cleaning up due to error state");
@@ -344,7 +348,11 @@ impl<T: AirPlayReceiverSink> Reconcilable for CarPlayWirelessGadget<T> {
                     ..CarPlaySessionIdentity::default()
                 };
 
-                let cb = move || CarPlayServerSession::new(mfi.clone(), identity.clone()).0;
+                // Called for every iAP2 connection the iPhone opens over Bluetooth.
+                let cb = move || {
+                    timeline::mark(Stage::PhoneBluetooth);
+                    CarPlayServerSession::new(mfi.clone(), identity.clone()).0
+                };
                 let mut mgr = BluetoothManager::new(false, true, true, hci, cb);
                 mgr.start()
                     .await
@@ -435,7 +443,11 @@ impl<T: AirPlayReceiverSink> Reconcilable for CarPlayWirelessGadget<T> {
                     self.mfi.clone(),
                     self.shared.clone(),
                     AirPlayReceiverProfile::CarPlay,
-                    move || (sink)(),
+                    // Called for every connection the iPhone opens over Wi-Fi.
+                    move || {
+                        timeline::mark(Stage::PhoneWifi);
+                        (sink)()
+                    },
                 );
 
                 self.last_mac.replace(*mac);
