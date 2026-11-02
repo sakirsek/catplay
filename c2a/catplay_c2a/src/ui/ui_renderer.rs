@@ -324,3 +324,36 @@ fn test_waiting_for_connection_keyframe_cache_cycle() {
     let _ = std::fs::remove_file(cache_file);
     let _ = std::fs::remove_dir(persist_dir);
 }
+
+#[test]
+fn test_pairing_screen_stays_inside_common_head_unit_screens() {
+    // 800x480 and 1280x720 at the 160 dpi fallback, plus a wide 1920x720 panel.
+    const SCREENS: [(i32, i32, f32); 3] = [(800, 480, 160.0), (1280, 720, 160.0), (1920, 720, 168.0)];
+    // Set CATPLAY_UI_PREVIEW_DIR to also write the rendered screens as PNGs for a visual check.
+    let preview_dir = std::env::var_os("CATPLAY_UI_PREVIEW_DIR").map(PathBuf::from);
+
+    for (width, height, dpi) in SCREENS {
+        let mut renderer = UiRenderer::new(width, height, 60, dpi, None).unwrap();
+        let state = UiState::Pairing {
+            device: "Somebody's iPhone with a long name".into(),
+            pin: "756615".into(),
+        };
+        renderer.render_framebuffer(state, true).unwrap();
+
+        if let Some(dir) = &preview_dir {
+            renderer
+                .export_img_to_disk(dir.join(format!("pairing_{width}x{height}.png")))
+                .unwrap();
+        }
+
+        let (w, h) = (width as usize, height as usize);
+        let px = Canvas::rgba_u32(renderer.fb.framebuffer());
+        let bg = px[0];
+        let touches_side = (0..h).any(|y| px[y * w] != bg || px[y * w + w - 1] != bg);
+        let touches_bottom = px[(h - 1) * w..].iter().any(|p| *p != bg);
+        assert!(
+            !touches_side && !touches_bottom,
+            "{width}x{height}: pairing screen is cut at the screen edge"
+        );
+    }
+}
