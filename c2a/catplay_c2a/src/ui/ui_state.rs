@@ -107,20 +107,37 @@ impl UiState {
                 RenderOp::ReleaseFont { id: "font".into() },
             ],
 
+            // Pairing is confirmed by any HID event from the car (see `OverlayPolicy::on_hid_interact`).
+            // Touch-only head units give no hint that a tap is what's expected, so say it explicitly,
+            // and keep the logo smaller and higher to leave room for two lines on 480p screens.
             UiState::Pairing { device, pin } => vec![
                 RenderOp::SetBackground { rgba: BG_COLOR },
                 RenderOp::BlitAsset {
                     id: "logo".into(),
                     rect: UiRect {
                         x: Unit::Percent(0.5),
-                        y: Unit::Percent(0.5),
-                        w: Unit::Dp(300.0),
-                        h: Unit::Dp(300.0),
+                        y: Unit::Percent(0.38),
+                        w: Unit::Dp(240.0),
+                        h: Unit::Dp(240.0),
                         anchor: Anchor::Center,
                     },
                 },
                 RenderOp::DrawText {
-                    text: format!("Press any key to pair: {device} | {pin}"),
+                    text: "Tap the screen or press any button to pair".into(),
+                    rect: UiRect {
+                        x: Unit::Percent(0.5),
+                        y: Unit::Percent(0.68),
+                        w: Unit::Dp(700.0),
+                        h: Unit::Dp(0.0),
+                        anchor: Anchor::BaselineCenter,
+                    },
+                    align: TextAlign::Center,
+                    font_id: "font".into(),
+                    font_size_pt: 22.0,
+                    color: 0xFFFFFFFF,
+                },
+                RenderOp::DrawText {
+                    text: format!("{device}  ·  {pin}"),
                     rect: UiRect {
                         x: Unit::Percent(0.5),
                         y: Unit::Percent(0.8),
@@ -130,7 +147,7 @@ impl UiState {
                     },
                     align: TextAlign::Center,
                     font_id: "font".into(),
-                    font_size_pt: 30.0,
+                    font_size_pt: 32.0,
                     color: 0xFFFFFFFF,
                 },
                 RenderOp::ReleaseAsset { id: "logo".into() },
