@@ -1,0 +1,51 @@
+name: test
+
+on:
+  push:
+    branches: [dev, master]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build CI image (Dockerfile.ci)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.ci
+          tags: catplay-ci:latest
+          load: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            .ci-cache/registry
+            target
+          key: cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-
+
+      - name: Test
+        run: |
+          mkdir -p .ci-cache/registry
+          docker run --rm \
+            -v "$PWD:/src" -v "$PWD/.ci-cache/registry:/usr/local/cargo/registry" \
+            -w /src catplay-ci:latest \
+            cargo test --workspace --locked --no-fail-fast
+
+      - name: Clippy (report only)
+        continue-on-error: true
+        run: |
+          docker run --rm \
+            -v "$PWD:/src" -v "$PWD/.ci-cache/registry:/usr/local/cargo/registry" \
+            -w /src catplay-ci:latest \
+            cargo clippy --workspace --all-targets --locked
