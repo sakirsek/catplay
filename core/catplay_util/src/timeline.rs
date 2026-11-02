@@ -4,10 +4,14 @@
 //! reached. When the first iPhone frame reaches the car, one `connect_timeline:` line summarises the boot,
 //! so cold starts are easy to compare. If CarPlay never comes up (for example the car never opens the USB
 //! session), the per-stage lines show how far it got.
+//!
+//! Errors can be counted with [record_error], and [set_listener] lets a writer (e.g. a persistent boot journal)
+//! follow changes and read them back with [snapshot].
 
 use std::{
+    fmt::Display,
     sync::{
-        Mutex,
+        Mutex, OnceLock,
         atomic::{AtomicU8, Ordering},
     },
     time::{Duration, Instant},
@@ -59,12 +63,36 @@ impl Stage {
     }
 }
 
+/// What a listener is told about; read the details with [snapshot].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Change {
+    /// A stage was reached for the first time.
+    Stage,
+    /// An error was recorded.
+    Error,
+}
+
+/// The timeline at one moment.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Snapshot {
+    /// Every stage in order, with the time it was first reached.
+    pub stages: Vec<(Stage, Option<Duration>)>,
+    /// Time of this snapshot, on the same clock as the stages.
+    pub now: Duration,
+    /// Whether the clock counts from kernel boot (otherwise from app start).
+    pub since_boot: bool,
+    pub errors: u32,
+    pub last_error: Option<String>,
+}
+
 struct Timeline {
     /// Process clock reading when the timeline was created.
     origin: Instant,
     /// Time since kernel boot at `origin`, if the system exposes it.
     origin_since_boot: Option<Duration>,
     marks: [Option<Duration>; Stage::ALL.len()],
+    errors: u32,
+    last_error: Option<String>,
 }
 
 impl Timeline {
@@ -73,7 +101,13 @@ impl Timeline {
             origin,
             origin_since_boot,
             marks: [None; Stage::ALL.len()],
+            errors: 0,
+            last_error: None,
         }
+    }
+
+    fn at(&self, now: Instant) -> Duration {
+        self.origin_since_boot.unwrap_or_default() + now.saturating_duration_since(self.origin)
     }
 
     fn clock(&self) -> &'static str {
@@ -85,18 +119,35 @@ impl Timeline {
 
     /// Records `stage` at `now` if it was not reached before, and returns the line to log.
     fn mark(&mut self, stage: Stage, now: Instant) -> Option<String> {
-        let slot = &mut self.marks[stage as usize];
-        if slot.is_some() {
+        if self.marks[stage as usize].is_some() {
             return None;
         }
 
-        let at = self.origin_since_boot.unwrap_or_default() + now.saturating_duration_since(self.origin);
-        *slot = Some(at);
+        let at = self.at(now);
+        self.marks[stage as usize] = Some(at);
 
         Some(match stage {
             Stage::FirstFrame => self.summary(),
             _ => format!("connect_timeline: {} at {} {}", stage.name(), secs(at), self.clock()),
         })
+    }
+
+    fn record_error(&mut self, error: &str) {
+        self.errors = self.errors.saturating_add(1);
+        self.last_error = Some(error.chars().take(MAX_ERROR_CHARS).collect());
+    }
+
+    fn snapshot(&self, now: Instant) -> Snapshot {
+        Snapshot {
+            stages: Stage::ALL
+                .iter()
+                .map(|stage| (*stage, self.marks[*stage as usize]))
+                .collect(),
+            now: self.at(now),
+            since_boot: self.origin_since_boot.is_some(),
+            errors: self.errors,
+            last_error: self.last_error.clone(),
+        }
     }
 
     fn summary(&self) -> String {
@@ -126,7 +177,11 @@ fn parse_uptime(uptime: &str) -> Option<Duration> {
     Duration::try_from_secs_f64(secs).ok()
 }
 
+/// Errors are kept short: they end up in a one-line journal entry.
+const MAX_ERROR_CHARS: usize = 120;
+
 static TIMELINE: Mutex<Option<Timeline>> = Mutex::new(None);
+static LISTENER: OnceLock<Box<dyn Fn(Change) + Send + Sync>> = OnceLock::new();
 /// Stages already marked, so repeated marks (e.g. every video frame) skip the lock.
 static REACHED: AtomicU8 = AtomicU8::new(0);
 
@@ -149,6 +204,43 @@ pub fn mark(stage: Stage) {
 
     if let Some(line) = line {
         log::info!("{line}");
+        notify(Change::Stage);
+    }
+}
+
+/// Counts an error and keeps its text (shortened) as the last error.
+pub fn record_error(error: &dyn Display) {
+    let now = Instant::now();
+    {
+        let Ok(mut timeline) = TIMELINE.lock() else {
+            return;
+        };
+        timeline
+            .get_or_insert_with(|| Timeline::new(now, since_boot()))
+            .record_error(&error.to_string());
+    }
+    notify(Change::Error);
+}
+
+/// The timeline now, or `None` before anything was marked or recorded.
+pub fn snapshot() -> Option<Snapshot> {
+    let now = Instant::now();
+    TIMELINE
+        .lock()
+        .ok()?
+        .as_ref()
+        .map(|timeline| timeline.snapshot(now))
+}
+
+/// Registers the one listener that is called after every change. It runs on the caller's thread,
+/// so it must not block (hand the work to another thread). Returns false if one was already set.
+pub fn set_listener(listener: impl Fn(Change) + Send + Sync + 'static) -> bool {
+    LISTENER.set(Box::new(listener)).is_ok()
+}
+
+fn notify(change: Change) {
+    if let Some(listener) = LISTENER.get() {
+        listener(change);
     }
 }
 
@@ -203,6 +295,24 @@ mod tests {
                 .as_deref(),
             Some("connect_timeline: phone_wifi at 0.50s since app start")
         );
+    }
+
+    #[test]
+    fn snapshot_has_marks_errors_and_now() {
+        let origin = Instant::now();
+        let mut timeline = Timeline::new(origin, Some(Duration::from_millis(1_000)));
+        timeline.mark(Stage::CarUsb, origin + Duration::from_millis(500));
+        timeline.record_error("first");
+        timeline.record_error(&"x".repeat(500));
+
+        let snap = timeline.snapshot(origin + Duration::from_millis(2_000));
+        assert_eq!(snap.now, Duration::from_millis(3_000));
+        assert!(snap.since_boot);
+        assert_eq!(snap.stages.len(), Stage::ALL.len());
+        assert_eq!(snap.stages[1], (Stage::CarUsb, Some(Duration::from_millis(1_500))));
+        assert_eq!(snap.stages[0], (Stage::AppStart, None));
+        assert_eq!(snap.errors, 2);
+        assert_eq!(snap.last_error.map(|e| e.len()), Some(MAX_ERROR_CHARS), "long errors are shortened");
     }
 
     #[test]

@@ -164,7 +164,10 @@ impl Reconcilable for ProdGadget {
     async fn on_update(&mut self, new: LocalStatus) -> LocalStatus {
         match new {
             Ok(ref ok) => info!("Progressing -> {ok:?}"),
-            Err(ref err) => error!("Entered error state: {err:?}"),
+            Err(ref err) => {
+                error!("Entered error state: {err:?}");
+                catplay_util::timeline::record_error(&format_args!("prod: {err:?}"));
+            }
         };
 
         if new.is_err() {
